@@ -6,6 +6,7 @@ import csv
 load_dotenv(dotenv_path='../.env')
 import time
 from datetime import datetime, timedelta
+from requests.exceptions import ConnectionError, ChunkedEncodingError, ReadTimeout
 
 marketUrl = os.getenv('marketUrl')
 url = marketUrl + '/stocks/bars'
@@ -51,35 +52,66 @@ class GetData:
             writer = csv.writer(file)
             writer.writerow(['symbol'])
 
+        # start_here = False
+        start_here = True
         for i, row in stocks_df.iterrows():
             symbol = row['symbol']
-            url = f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={self.finhub_token}"
 
-            if i % 100 == 0:
-                print(f'On ticker {i}')
+            # if symbol == 'MIMTF': # last successful operation
+            #     start_here = True
+            #     continue
+            if start_here:
+                url = f"https://finnhub.io/api/v1/stock/profile2?symbol={symbol}&token={self.finhub_token}"
 
-            retry = True
-            while retry:
-                response = requests.get(url)
-                if response.status_code == 429:
-                    print("Rate limit hit, pausing for 35 seconds...")
-                    time.sleep(35)
+                if i % 100 == 0:
+                    print(f'On ticker {i}')
+
+                max_retries = 5
+                retry_count = 0
+                retry = True
+
+                while retry:
+                    try:
+                        response = requests.get(url, timeout=15)
+                        if response.status_code == 429:
+                            print("Rate limit hit, pausing for 35 seconds...")
+                            time.sleep(35)
+                        elif response.status_code == 200:
+                            retry = False
+                        else:
+                            print(f'Issue!!!!!! {response.status_code}')
+                            print(response.text)
+                            retry_count += 1
+                            time.sleep(2)
+                    except (ConnectionError, ChunkedEncodingError, ReadTimeout) as e:
+                        retry_count += 1
+                        wait_time = 5 * retry_count  # Increasing backoff
+                        print(f"Connection error: {e}. Retrying in {wait_time} seconds... ({retry_count}/{max_retries})")
+                        time.sleep(wait_time)
+
+                if retry_count < max_retries:
+                    try:
+                        data = response.json()
+                        market_cap = data['marketCapitalization']
+                        if type(market_cap) == float and market_cap > 100:
+                            with open('stocks_with_market_cap.csv', 'a', newline='') as file:
+                                writer = csv.writer(file)
+                                writer.writerow([symbol, data['marketCapitalization']])
+
+                    except Exception as e:
+                        print(f'Problem with stock: {symbol}, error: {e}')
+                        with open('errors_fetching.csv', 'a', newline='') as file:
+                            writer = csv.writer(file)
+                            writer.writerow([symbol])
+
+
+                    time.sleep(0.5)
+
                 else:
-                    retry = False
-
-            try:
-                data = response.json()
-                with open('stocks_with_market_cap.csv', 'a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([symbol, data['marketCapitalization']])
-
-            except Exception as e:
-                print(f'Problem with stock: {symbol}, error: {e}')
-                with open('errors_fetching.csv', 'a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([symbol])
-
-            time.sleep(0.5)
+                    print(f"Failed to get data for {symbol} after {max_retries} attempts")
+                    with open('errors_fetching.csv', 'a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([symbol])
 
     def add_to_db(self, data):
         pass

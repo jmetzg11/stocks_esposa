@@ -1,0 +1,5 @@
+# New Strategy
+
+- simulation
+
+- implementation

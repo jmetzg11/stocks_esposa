@@ -1,2 +1,12 @@
 data/venv
 .env
+*.csv
+__pycache__
+
+nohup.out
+tmp
+.air.toml
+*.txt
+
+main
+
