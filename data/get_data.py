@@ -3,9 +3,11 @@ import pandas as pd
 from dotenv import load_dotenv
 import requests
 import csv
+import os
 load_dotenv(dotenv_path='../.env')
 import time
 from datetime import datetime, timedelta
+import sqlite3
 from requests.exceptions import ConnectionError, ChunkedEncodingError, ReadTimeout
 
 marketUrl = os.getenv('marketUrl')
@@ -13,6 +15,12 @@ url = marketUrl + '/stocks/bars'
 
 
 class GetData:
+    """
+    1. get all assests from Alpaca (get_assets)
+    2. Get all Market caps from Finhub, watch out for throttling (get_market_cap)
+    3. Get 10 years of data of a stock from Alpaca (get_historical_bars)
+    4. Put data in sqlite db
+    """
     def __init__(self):
         self.marketUrl = os.getenv('marketUrl')
         self.accountUrl = os.getenv('accountUrl')
@@ -113,48 +121,134 @@ class GetData:
                         writer = csv.writer(file)
                         writer.writerow([symbol])
 
-    def add_to_db(self, data):
-        pass
+    def fetch_and_save_historical_data(self, url, symbol):
+        all_bars = []
+        page_token = None
+        max_retries = 3
+        retry_count = 0
+        while True:
+            if page_token:
+                full_url = url + f'&page_token={page_token}'
+            else:
+                full_url = url
+
+            try:
+                time.sleep(0.3)
+                response = requests.get(full_url, headers=self.headers)
+
+                if response.status_code == 429:
+                    sleep_time = 10 + (10 * retry_count)
+                    time.sleep(sleep_time)
+                    print(f'Rate limit: pausing for {sleep_time} seconds')
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        continue
+                    else:
+                        with open('errors_getting_historical.csv', 'a', newline='') as file:
+                            writer = csv.writer(file)
+                            writer.writerow([response.status_code, full_url, response.text])
+                        return False
+
+                if response.status_code != 200:
+                    with open('errors_getting_historical.csv', 'a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([response.status_code, full_url, response.text])
+                    return False
+
+                retry_count = 0
+                data = response.json()
+                bars = data['bars'][symbol]
+                bars = [{'c': b['c'], 't': b['t']} for b in bars]
+                all_bars.extend(bars)
+
+                page_token = data.get('next_page_token')
+                if not page_token:
+                    break
+            except Exception as e:
+                with open('errors_getting_historical.csv', 'a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow(['ERROR', full_url, e])
+                return False
+
+        if all_bars:
+            df = pd.DataFrame(all_bars)
+
+            filename = f'bars/{symbol}.csv'
+            df.to_csv(filename, index=False)
+            return True
+        else:
+            with open('errors_getting_historical.csv', 'a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['NO BARS', url, ''])
+            return False
 
     def get_historical_bars(self):
-        base_url = self.marketUrl + '/bars'
+        base_url = self.marketUrl + '/stocks/bars'
         df = pd.read_csv('stocks_with_market_cap.csv')
-        today = datetime.now().strftime('%Y-%m-%d')
-        ten_years = 365 * 10
+
+        today = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        ten_years = 365 * 10 + (365//2)
         ten_years_ago = (datetime.now() - timedelta(days=ten_years)).strftime('%Y-%m-%d')
+        start = f'&start={ten_years_ago}'
+        end = f'&end={today}'
 
-        start = f'&start={today}'
-        end = f'&end={ten_years_ago}'
-
-        results = []
-
+        asof = f'&asof={today}'
+        timeframe = '&timeframe=1Day'
+        count = 0
         for i, row in df.iterrows():
-            symbol = f'?symbols={row['sybmol']}'
-            if i < 10:
-                MC = row['marketCapitalization']
-                MC = MC * 1000000
-                if MC > 1000000000:
+            if i % 50 == 0:
+                print(f'On stock: {i}')
 
-                    url = base_url + symbol + start + end
-                    response = requests.get(url, headers=self.headers)
+            symbol = row['symbol']
+            market_cap = row['marketCapitalization']
 
-                    if response.status_code != 200:
-                        print(response)
+            # skip tickers that are numbers
+            if not isinstance(symbol, str):
+                continue
 
-                    else:
-                        data = response.json()
-                        results.append(data)
+            # 1 billion
+            has_large_market_cap = market_cap > 1000
 
-        return results
+            # check if it's not a likely OTC/foreign stock
+            is_shorter_symbol = len(symbol) < 5
+            is_acceptable_5_letter = len(symbol) == 5 and symbol[-1] not in ['F', 'Y']
+            is_not_foreign_stock = is_shorter_symbol or is_acceptable_5_letter
 
+            if has_large_market_cap and is_not_foreign_stock:
+                url = base_url + f"?symbols={row['symbol']}" + timeframe + start + end + asof
 
+                if self.fetch_and_save_historical_data(url, symbol):
+                    print(f'Finished: {symbol}')
+                    count += 1
+                else:
+                    print(f'Error: {symbol}')
 
+    def crate_reference_table(self):
+        pass
 
+    def create_historical_table(self):
+        conn = sqlite3.connect('stocks.db')
+        csv_files = os.listdir('bars')
+        print(f'Processing {len(csv_files)} files')
+        for i, csv_file in enumerate(csv_files):
+            symbol = csv_file.split('.')[0]
+            df = pd.read_csv(f'bars/{csv_file}')
+            df = df.rename(columns={'c': 'price', 't': 'date'})
+            df['date'] = df['date'].str.split('T').str[0]
+            df['date'] = pd.to_datetime(df['date'])
+            df['symbol'] = symbol
 
-        # symbol,marketCapitalization
+            df.to_sql('historical', conn, if_exists='append', index=False)
 
+            if i % 20 == 0:
+                print(f'Finished {i}')
 
-
+        cursor = conn.cursor()
+        cursor.execute('CREATE INDEX idx_symbol ON historical(symbol)')
+        cursor.execute('CREATE INDEX idx_date ON historical(date)')
+        cursor.execute('CREATE INDEX idx_symbol_date ON historical(symbol, date)')
+        conn.commit()
+        conn.close()
 
 g = GetData()
-g.get_market_cap()
+g.create_db()
