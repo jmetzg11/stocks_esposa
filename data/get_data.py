@@ -223,15 +223,14 @@ class GetData:
                 else:
                     print(f'Error: {symbol}')
 
-    def crate_reference_table(self):
-        pass
 
     def create_historical_table(self):
         conn = sqlite3.connect('stocks.db')
         csv_files = os.listdir('bars')
         print(f'Processing {len(csv_files)} files')
         for i, csv_file in enumerate(csv_files):
-            symbol = csv_file.split('.')[0]
+            symbol = csv_file[:-4]
+
             df = pd.read_csv(f'bars/{csv_file}')
             df = df.rename(columns={'c': 'price', 't': 'date'})
             df['date'] = df['date'].str.split('T').str[0]
@@ -240,7 +239,7 @@ class GetData:
 
             df.to_sql('historical', conn, if_exists='append', index=False)
 
-            if i % 20 == 0:
+            if i % 50 == 0:
                 print(f'Finished {i}')
 
         cursor = conn.cursor()
@@ -250,5 +249,32 @@ class GetData:
         conn.commit()
         conn.close()
 
+    def make_market_cap_table(self):
+        market_df = pd.read_csv('stocks_with_market_cap.csv')
+
+        conn = sqlite3.connect('stocks.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT symbol FROM historical")
+        symbols = cursor.fetchall()
+        symbol_list = [symbol[0] for symbol in symbols]
+
+        print(f'Length of symbol list: {len(symbol_list)}')
+
+        symbols = []
+        market_caps = []
+        for s in symbol_list:
+            market_cap_series = market_df[market_df['symbol'] == s]['marketCapitalization']
+            try:
+                market_cap = market_cap_series.values[0]
+                market_caps.append(market_cap)
+                symbols.append(s)
+            except:
+                print(f'issue with: {s}')
+
+        df = pd.DataFrame({'symbol': symbols, 'market_cap': market_caps})
+        df.to_sql('market_cap', conn, if_exists='append', index=False)
+
+        conn.close()
+
 g = GetData()
-g.create_db()
+g.make_market_cap_table()
