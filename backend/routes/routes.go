@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"stocks/backend/api"
+	"stocks/backend/database"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -10,11 +12,14 @@ import (
 func SetupAPIRoutes(router *gin.Engine) {
 	setupCORS(router)
 
+	handler := api.NewHandler(database.DB)
+
 	apiRouter := router.Group("/api")
 	{
 		apiRouter.GET("/hello", func(c *gin.Context) {
 			c.JSON(200, gin.H{"message": "Hello from Go!"})
 		})
+		apiRouter.POST("/start_simulation", handler.StartSimulation)
 	}
 }
 

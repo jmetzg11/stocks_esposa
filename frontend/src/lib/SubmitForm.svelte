@@ -5,7 +5,7 @@
 	let formData = defaultValues();
 
 	function handleClick() {
-		// startSimulation(formData)
+		startSimulation(formData);
 		console.log(formData);
 	}
 </script>

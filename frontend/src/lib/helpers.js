@@ -12,6 +12,8 @@ export async function startSimulation(data) {
 			console.error('Error starting simulation', response.statusText);
 			return false;
 		}
+		data = await response.json();
+		console.log(data);
 		return true;
 	} catch (error) {
 		console.error('Error starting simulation', error);
