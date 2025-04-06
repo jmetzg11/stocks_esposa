@@ -1,4 +1,5 @@
-export async function startSimulation(data) {
+export async function startSimulation(payLoad) {
+	console.log(payLoad);
 	try {
 		const url = `${import.meta.env.VITE_API_URL}/start_simulation`;
 		const response = await fetch(url, {
@@ -6,13 +7,13 @@ export async function startSimulation(data) {
 			headers: {
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify(data)
+			body: JSON.stringify(payLoad)
 		});
 		if (!response.ok) {
 			console.error('Error starting simulation', response.statusText);
 			return false;
 		}
-		data = await response.json();
+		const data = await response.json();
 		console.log(data);
 		return true;
 	} catch (error) {
@@ -32,10 +33,10 @@ export function defaultValues() {
 	};
 }
 export const formFields = [
-	{ value: 'marketCap', label: 'Market Cap ($ Billion)' },
+	{ value: 'marketCap', label: 'Min Market Cap ($ Billion)' },
 	{ value: 'negativeTrend', label: 'Negative Trend limit (weeks)' },
-	{ value: 'OnePercentAmount', label: '1% Buy Amount' },
-	{ value: 'TenPercentAmount', label: '10% Buy Amount' },
-	{ value: 'lastBountLimit', label: 'Since last investment (days)' },
+	{ value: 'onePercentBuy', label: '1% Buy Amount' },
+	{ value: 'tenPercentBuy', label: '10% Buy Amount' },
+	{ value: 'lastBuyLimit', label: 'Since last investment (days)' },
 	{ value: 'portfolioProportion', label: 'Proportion of Portfolio (basis points)' }
 ];
