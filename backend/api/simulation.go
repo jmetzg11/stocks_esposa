@@ -9,43 +9,40 @@ import (
 	"gorm.io/gorm"
 )
 
+type processingContext struct {
+	db         *gorm.DB
+	parameters *models.SimulationParameters
+	symbol     string
+	priceData  *[]models.PricePoint
+	startIndex int
+}
+
 func processStock(db *gorm.DB, parameters *models.SimulationParameters, symbol string) error {
-	var priceData []models.PricePoint
-	result := db.Model(&models.Historical{}).
-		Select("date, price").
-		Where("symbol = ?", symbol).
-		Order("date ASC").
-		Find(&priceData)
-
-	if result.Error != nil {
-		return fmt.Errorf("error querying data for %s: %v", symbol, result.Error)
-	}
-	if len(priceData) == 0 {
-		return fmt.Errorf("no price data found for %s", symbol)
+	ctx := &processingContext{
+		db:         db,
+		parameters: parameters,
+		symbol:     symbol,
 	}
 
-	startDate, err := findStartDate(priceData, parameters.NegativeTrend)
-	if err != nil {
+	// fetch price slice
+	if err := ctx.fetchPriceData(); err != nil {
 		return err
 	}
 
-	startIndex, err := getStartIndex(priceData, startDate)
-	if err != nil {
+	// find starting point in order to calculate negative trend
+	if err := ctx.determineStartingPoint(); err != nil {
 		return err
 	}
 
-	for i := startIndex; i < len(priceData); i++ {
-		dataPoint := &priceData[i]
-
-		if !passLastBuyCheck(db, symbol, dataPoint, parameters) {
-			continue
+	for i := ctx.startIndex; i < len(*ctx.priceData); i++ {
+		dataPoint := &(*ctx.priceData)[i]
+		// check 4 conditions
+		if ctx.shouldPurchase(dataPoint) {
+			// make investment
+			if err := ctx.makePurchase(dataPoint); err != nil {
+				return err
+			}
 		}
-
-		// check negative trend
-
-		// check proportion of portfolio
-
-		// make purchase if all conditions pass
 	}
 
 	return nil

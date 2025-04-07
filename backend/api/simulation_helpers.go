@@ -20,6 +20,25 @@ func generateVersion(p models.SimulationParameters) string {
 		p.PortfolioProportion)
 }
 
+func (ctx *processingContext) fetchPriceData() error {
+	var data []models.PricePoint
+	result := ctx.db.Model(&models.Historical{}).
+		Select("date, price").
+		Where("symbol = ?", ctx.symbol).
+		Order("date ASC").
+		Find(&data)
+
+	if result.Error != nil {
+		return fmt.Errorf("error querying data for %s: %v", ctx.symbol, result.Error)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("no price data found for %s", ctx.symbol)
+	}
+
+	ctx.priceData = &data // Store pointer to the slice
+	return nil
+}
+
 func findStartDate(priceData []models.PricePoint, weeks int) (time.Time, error) {
 	// the start date needs to be a spot where there is enough data to check for the negative trend
 	minDate := priceData[0].Date
@@ -42,7 +61,21 @@ func getStartIndex(priceData []models.PricePoint, startDate time.Time) (int, err
 	return 0, fmt.Errorf("error finding starting index")
 }
 
-func passLastBuyCheck(db *gorm.DB, symbol string, dataPoint *models.PricePoint, parameters *models.SimulationParameters) bool {
+func (ctx *processingContext) determineStartingPoint() error {
+	startDate, err := findStartDate(*ctx.priceData, ctx.parameters.NegativeTrend)
+	if err != nil {
+		return err
+	}
+
+	ctx.startIndex, err = getStartIndex(*ctx.priceData, startDate)
+	return err
+}
+
+func (ctx *processingContext) passFallInPrice(dataPoint *models.PricePoint) bool {
+	return true
+}
+
+func (ctx *processingContext) passLastBuyCheck(dataPoint *models.PricePoint) bool {
 	var investment models.Investment
 	result := db.Where("symbol = ? AND version = ?", symbol, parameters.Version).First(&investment)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -52,4 +85,24 @@ func passLastBuyCheck(db *gorm.DB, symbol string, dataPoint *models.PricePoint, 
 	cutOffDate := dataPoint.Date.AddDate(0, 0, -parameters.LastBuyLimit)
 
 	return investment.LastTransaction.Before(cutOffDate)
+}
+
+func (ctx *processingContext) passNegativeTrend(dataPoint *models.PricePoint) bool {
+	return true
+}
+
+func (ctx *processingContext) passProportion(dataPoint *models.PricePoint) bool {
+	return true
+}
+
+func (ctx *processingContext) shouldPurchase(dataPoint *models.PricePoint) bool {
+	return ctx.passFallInPrice(dataPoint) &&
+		ctx.passLastBuyCheck(dataPoint) &&
+		ctx.passNegativeTrend(dataPoint) &&
+		ctx.passProportion(dataPoint)
+}
+
+func (ctx *processingContext) makePurchase(data *models.PricePoint) error {
+	fmt.Println("invest here")
+	return nil
 }
